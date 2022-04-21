@@ -1,0 +1,228 @@
+cd $GIT_REPO_CHARTS_PATH
+set -e;
+
+env
+if [  -z "$CHART_VERSION" ]; then
+    #Take chart version from helm charts
+    CHART_VERSION=$(helm show chart . | grep '^version:' | cut -d':' -f2 | sed 's/^ *//g')
+fi;
+CHART_NAME=$(helm show chart . | grep '^name:' | cut -d':' -f2 | sed 's/^ *//g')
+echo $CHART_VERSION
+echo $CHART_NAME
+
+echo curl --silent --write-out "HTTPSTATUS:%{http_code}" -X POST   "http://$FLOW_ORC_ENDPOINT/v1/deploy-candidate/generate-helm-push-commands"   -H 'Accept: */*'   -H 'Accept-Encoding: gzip, deflate'   -H 'Cache-Control: no-cache'   -H 'Connection: keep-alive'   -H 'Content-Type: application/json'    -H 'cache-control: no-cache'   -d '{
+"chart_name" : "'${CHART_NAME}'",
+"registry_id" : '${FLOW_REGISTRY_ID}',
+"chart_version" : "'${CHART_VERSION}'"
+}' 
+
+# Test for version existence and commands
+HTTP_RESPONSE=$(curl --silent --write-out "HTTPSTATUS:%{http_code}" -X POST   "http://$FLOW_ORC_ENDPOINT/v1/deploy-candidate/generate-helm-push-commands"   -H 'Accept: */*'   -H 'Accept-Encoding: gzip, deflate'   -H 'Cache-Control: no-cache'   -H 'Connection: keep-alive'   -H 'Content-Type: application/json'    -H 'cache-control: no-cache'   -d '{
+"chart_name" : "'${CHART_NAME}'",
+"registry_id" : '${FLOW_REGISTRY_ID}',
+"chart_version" : "'${CHART_VERSION}'"
+}' )
+
+
+HTTP_BODY=$(echo $HTTP_RESPONSE | sed -e 's/HTTPSTATUS\:.*//g')
+
+# extract the status
+HTTP_STATUS=$(echo $HTTP_RESPONSE | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+
+# example using the status
+if [ ! $HTTP_STATUS -eq 200  ]; then
+  echo "Error [HTTP status: $HTTP_STATUS] "
+  echo "Response: $HTTP_BODY"
+  exit 1
+fi
+
+echo $HTTP_BODY
+
+echo $HTTP_RESPONSE 
+
+#########Validate for already existing release/feature candidate with same tag#############
+
+
+existAlready=`echo $HTTP_BODY | jq -r .exist_already`
+
+if [ $existAlready == true ]; then
+  echo "Warning: Duplicate entry, deploy candidate exist with same name/label, Ignoring harbor push "
+  DEPLOY_CANDIDATE_ID=`echo $HTTP_BODY | jq -r .dc_id`
+  produce_output DEPLOY_CANDIDATE_ID $DEPLOY_CANDIDATE_ID
+  exit 0;
+fi
+
+
+########### fetch commands from response
+
+RepoAddCmd=`echo $HTTP_BODY | jq -r .repo_add`
+ChartPushCmd=`echo $HTTP_BODY | jq -r .chart_push`
+PostPushCmd=`echo $HTTP_BODY | jq -r .post_push`
+
+$RepoAddCmd
+
+if [[ $ChartPushCmd == helm* ]];
+then 
+     $ChartPushCmd
+elif [[ $ChartPushCmd == curl* ]]; 
+then 
+    helm package . --version $CHART_VERSION
+    eval $ChartPushCmd
+fi
+
+HTTP_RESPONSE=$(curl --silent --write-out "HTTPSTATUS:%{http_code}" -X POST   "http://$FLOW_ORC_ENDPOINT/v1/deploy-candidate"   -H 'Content-Type: application/json'   -H 'Postman-Token: 198df417-a133-4447-9bde-bd6ab765ce94'   -H 'cache-control: no-cache'   -d '{
+  "pipeline_run_id" : '$FLOW_BUILD_NUMBER',
+  "pipeline_id" :   '$FLOW_PIPELINE_ID',
+  "pipeline_name" : "'$FLOW_JOB_NAME'",
+  "source_repo" : "'$REPO_NAME'",
+  "source_repo_branch" : "'$BRANCH_NAME'",
+  "source_commit_id" : "'$COMMIT_ID'",
+  "name" :      "'$CHART_NAME'",
+  "image_ref" : "",
+  "project_name" :  "'$FLOW_PROJECT_NAME'",
+  "version" :     1,
+  "candidate_type" : "DEV",
+  "artifact_type" : "chart",
+  "registry_id": '$FLOW_REGISTRY_ID',
+  "dc_meta" :   {
+    "chart_name":  "'$CHART_NAME'",
+    "chart_version":   "'$CHART_VERSION'",
+    "registry_id": '$FLOW_REGISTRY_ID',
+    "values_file_path" : "'$VALUES_FILE_PATH'" 
+  },
+  "is_deployable" : false 
+}' )
+# extract the body
+HTTP_BODY=$(echo $HTTP_RESPONSE | sed -e 's/HTTPSTATUS\:.*//g')
+
+# extract the status
+HTTP_STATUS=$(echo $HTTP_RESPONSE | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+
+# example using the status
+if [ ! $HTTP_STATUS -eq 201  ]; then
+  echo "Error [HTTP status: $HTTP_STATUS] "
+  echo "Response: $HTTP_BODY"
+  exit 1
+fi
+
+echo $HTTP_BODY
+echo $HTTP_RESPONSE;
+DEPLOY_CANDIDATE_ID=`echo $HTTP_BODY | jq -r .`
+produce_output DEPLOY_CANDIDATE_ID $DEPLOY_CANDIDATE_ID
+
+echo $PostPushCmd
+response=$(eval $PostPushCmd)
+
+if [ "$response" != "" ]; then
+   echo $response
+   echo "Error occured while setting properties to helm chart"
+   exit 1
+fi
+
+
+cd $REPO_NAME
+cd $GIT_REPO_CHARTS_PATH
+set -e;
+
+env
+if [  -z "$CHART_VERSION" ]; then
+    #Take chart version from helm charts
+    CHART_VERSION=$(helm show chart . | grep '^version:' | cut -d':' -f2 | sed 's/^ *//g')
+fi;
+CHART_NAME=$(helm show chart . | grep '^name:' | cut -d':' -f2 | sed 's/^ *//g')
+echo $CHART_VERSION
+echo $CHART_NAME
+
+echo curl --silent --write-out "HTTPSTATUS:%{http_code}" -X POST   "http://$FLOW_ORC_ENDPOINT/v1/deploy-candidate/generate-helm-push-commands"   -H 'Accept: */*'   -H 'Accept-Encoding: gzip, deflate'   -H 'Cache-Control: no-cache'   -H 'Connection: keep-alive'   -H 'Content-Type: application/json'    -H 'cache-control: no-cache'   -d '{
+"chart_name" : "'${CHART_NAME}'",
+"registry_id" : '${FLOW_REGISTRY_ID}',
+"chart_version" : "'${CHART_VERSION}'"
+}' 
+
+# Test for version existence and commands
+HTTP_RESPONSE=$(curl --silent --write-out "HTTPSTATUS:%{http_code}" -X POST   "http://$FLOW_ORC_ENDPOINT/v1/deploy-candidate/generate-helm-push-commands"   -H 'Accept: */*'   -H 'Accept-Encoding: gzip, deflate'   -H 'Cache-Control: no-cache'   -H 'Connection: keep-alive'   -H 'Content-Type: application/json'    -H 'cache-control: no-cache'   -d '{
+"chart_name" : "'${CHART_NAME}'",
+"registry_id" : '${FLOW_REGISTRY_ID}',
+"chart_version" : "'${CHART_VERSION}'"
+}' )
+
+
+HTTP_BODY=$(echo $HTTP_RESPONSE | sed -e 's/HTTPSTATUS\:.*//g')
+
+# extract the status
+HTTP_STATUS=$(echo $HTTP_RESPONSE | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+
+# example using the status
+if [ ! $HTTP_STATUS -eq 200  ]; then
+  echo "Error [HTTP status: $HTTP_STATUS] "
+  echo "Response: $HTTP_BODY"
+  exit 1
+fi
+
+echo $HTTP_BODY
+
+echo $HTTP_RESPONSE 
+
+#########Validate for already existing release/feature candidate with same tag#############
+
+
+existAlready=`echo $HTTP_BODY | jq -r .exist_already`
+
+if [ $existAlready == true ]; then
+  echo "Warning: Duplicate entry, deploy candidate exist with same name/label, Ignoring harbor push "
+  DEPLOY_CANDIDATE_ID=`echo $HTTP_BODY | jq -r .dc_id`
+  produce_output DEPLOY_CANDIDATE_ID $DEPLOY_CANDIDATE_ID
+  exit 0;
+fi
+
+
+########### fetch commands from response
+
+RepoAddCmd=`echo $HTTP_BODY | jq -r .repo_add`
+ChartPushCmd=`echo $HTTP_BODY | jq -r .chart_push`
+
+$RepoAddCmd
+
+ChartPushCmd="$ChartPushCmd --version $CHART_VERSION"
+$ChartPushCmd
+
+HTTP_RESPONSE=$(curl --silent --write-out "HTTPSTATUS:%{http_code}" -X POST   "http://$FLOW_ORC_ENDPOINT/v1/deploy-candidate"   -H 'Content-Type: application/json'   -H 'Postman-Token: 198df417-a133-4447-9bde-bd6ab765ce94'   -H 'cache-control: no-cache'   -d '{
+  "pipeline_run_id" : '$FLOW_BUILD_NUMBER',
+  "pipeline_id" :   '$FLOW_PIPELINE_ID',
+  "pipeline_name" : "'$FLOW_JOB_NAME'",
+  "source_repo" : "'$REPO_NAME'",
+  "source_repo_branch" : "'$BRANCH_NAME'",
+  "source_commit_id" : "'$COMMIT_ID'",
+  "name" :      "'$CHART_NAME'",
+  "image_ref" : "",
+  "project_name" :  "'$FLOW_PROJECT_NAME'",
+  "version" :     1,
+  "candidate_type" : "DEV",
+  "artifact_type" : "chart",
+  "registry_id": '$FLOW_REGISTRY_ID',
+  "dc_meta" :   {
+    "chart_name":  "'$CHART_NAME'",
+    "chart_version":   "'$CHART_VERSION'",
+    "registry_id": '$FLOW_REGISTRY_ID',
+    "values_file_path" : "'$VALUES_FILE_PATH'" 
+  },
+  "is_deployable" : false 
+}' )
+# extract the body
+HTTP_BODY=$(echo $HTTP_RESPONSE | sed -e 's/HTTPSTATUS\:.*//g')
+
+# extract the status
+HTTP_STATUS=$(echo $HTTP_RESPONSE | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+
+# example using the status
+if [ ! $HTTP_STATUS -eq 201  ]; then
+  echo "Error [HTTP status: $HTTP_STATUS] "
+  echo "Response: $HTTP_BODY"
+  exit 1
+fi
+
+echo $HTTP_BODY
+echo $HTTP_RESPONSE;
+DEPLOY_CANDIDATE_ID=`echo $HTTP_BODY | jq -r .`
+produce_output DEPLOY_CANDIDATE_ID $DEPLOY_CANDIDATE_ID
+
